@@ -15,6 +15,7 @@ build/
 !data/budgets.json
 !data/schedules.json
 !data/tickets.json
+!tests/fixtures/*.json
 
 .env
 .env.*
