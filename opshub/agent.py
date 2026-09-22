@@ -80,6 +80,13 @@ class ToolDispatcher:
         if task.budget_required is None:
             return True, "Task has no budget requirement.", {"status": "missing_context"}
 
+        if self.runtime_context.available_budget is None:
+            from opshub.tools.budget import DATA_FILE
+            if not DATA_FILE.exists():
+                return False, "Available budget is unknown; human context required.", {
+                    "status": "missing_context", "source": ContextSource.NONE.value,
+                }
+
         ok, msg, source = check_budget(
             task.budget_required,
             available=self.runtime_context.available_budget,
@@ -412,6 +419,7 @@ class OpsHubAgent:
                     "agent_action_failed",
                     {"step": step, "reason": str(e)},
                 )
+                self.current_plan.next_action = NextAction.WAIT_FOR_HUMAN
                 return False, self.observations
 
             # Validate task_id for task-specific actions
@@ -427,7 +435,7 @@ class OpsHubAgent:
                     self.observations.append(obs)
                     self.audit_log.add(
                         "task_id_validation_failed",
-                        {"step": step, "task_id": action.task_id},
+                        {"step": step, "action": action.action.value, "task_id": action.task_id},
                     )
                     continue
 
@@ -610,13 +618,15 @@ class OpsHubAgent:
                         "action": action.action.value,
                         "task_id": task_id,
                         "status": obs.status,
+                        "message": message,
+                        "details": details,
                     },
                 )
                 continue
 
         self.audit_log.add(
             "agent_step_limit_reached",
-            {"step": MAX_AGENT_STEPS},
+            {"step": MAX_AGENT_STEPS, "next_action": NextAction.WAIT_FOR_HUMAN.value},
         )
         if self.current_plan:
             self.current_plan.next_action = NextAction.WAIT_FOR_HUMAN

@@ -156,7 +156,11 @@ def main():
                         try:
                             choice = input("\n> ").strip()
                             if choice == "1":
-                                from opshub.tools.budget import load_budgets
+                                from opshub.tools.budget import DATA_FILE, load_budgets
+
+                                if not DATA_FILE.exists():
+                                    print("No runtime budget data found. Enter a budget manually.")
+                                    continue
 
                                 budget_data = load_budgets()
                                 available = budget_data.get("available", 0) - budget_data.get("allocated", 0)
@@ -215,10 +219,10 @@ def main():
                     print("\nWorkflow completed.")
                     break
                 if next_action != NextAction.READY_TO_CREATE_TICKET:
-                    if any(o.status == "failed" for o in new_observations):
+                    if any(o.status in {"failed", "missing_context"} for o in new_observations):
                         print("\nBlocking reasons:")
                         for obs in new_observations:
-                            if obs.status == "failed":
+                            if obs.status in {"failed", "missing_context"}:
                                 print(f"  - {obs.action} for {obs.task_id}: {obs.message}")
                     elif any(e["event"] in {"agent_step_limit_reached", "agent_stalled"}
                              for e in agent.audit_log.events[-2:]):

@@ -1,188 +1,57 @@
 # OpsHub Agent
 
-Terminal-native autonomous AI agent for SGA operational coordination.
+Terminal agent for a local operational planning demo. Phase 5 keeps the six-step
+ReAct loop, per-task checks, human ticket approval, and local JSON storage.
 
-## Status
+## Run
 
-Phase 4 - Automatic LLM provider fallback.
+Install with `pip install -e ".[dev]"`, then run `python -m opshub.cli`.
+The default `LLM_PROVIDER=mock` is deterministic and needs no API key. Type meeting
+notes, then `/run`; use `/log` to inspect the in-memory audit trail, `/new` to
+reset the session, or `/exit` to leave.
 
-## Features (Implemented)
+Provider options are `mock`, `qwen` (Groq), `nex` (OpenRouter), and `fallback`
+(Qwen/Groq primary, Nex/OpenRouter fallback). For the latter, set
+`LLM_PROVIDER=fallback`, `GROQ_API_KEY`, and `OPENROUTER_API_KEY`. Recoverable
+provider failures stop the run safely; free-tier availability is not guaranteed.
 
-- Interactive CLI for pasting meeting notes
-- Mock LLM provider for development
-- **Qwen/Groq primary provider** with automatic fallback
-- **Nex/OpenRouter fallback** for recoverable failures
-- Strict structured OperationalPlan output
-- Pydantic validation
-- Read-only tools:
-  - check_budget()
-  - check_schedule()
-- Policy evaluation
-- Human-in-the-loop approval
-- Per-task ticket creation
-- Runtime operational context (manual budget input)
-- Audit logging for all actions
+## Deterministic demos
 
-## LLM Provider Fallback
+Run `python -m pytest tests/test_phase5_scenarios.py -q` to replay all four cases
+with temporary ticket and schedule files. The scripted plan has a budget task
+requiring Rp12,000,000 and a schedule task due 2026-12-01.
 
-**Primary:** Qwen 3.8 27B via Groq (free tier)
+| Scenario | Deterministic inputs | Expected result |
+| --- | --- | --- |
+| Safe flow | Budget Rp15,000,000; empty schedule; approve both proposals | Two tickets, then finish |
+| Insufficient budget | Budget Rp10,000,000 | Failed check and human review; no ticket |
+| Schedule conflict | Event on 2026-12-01 | Failed check and human review; no ticket |
+| Missing critical context | No budget value and no budget file | Missing-context observation and human review; no ticket |
 
-**Fallback:** Nex-N2.5-Pro via OpenRouter (free tier)
+For the interactive mock demo, use the notes in `samples/grand_summit.txt`, type
+`/run`, choose `2` to enter a budget, enter `15000000` for the safe path or
+`10000000` for the budget block, and answer `y` only when a ticket approval prompt
+appears. The scripted tests provide the two-task flow and schedule conflict without
+editing `data/`.
 
-When Qwen/Groq is unavailable due to rate limits, timeouts, or temporary failures, OpsHub automatically switches to Nex/OpenRouter. This ensures continued operation while respecting the Rp0 budget constraint.
+## Safety boundary
 
-**Both services are free-tier** and may independently enforce rate limits. The fallback mechanism provides reliability but does not guarantee unlimited availability.
+The model returns only `{action, task_id, reason}`. Pydantic rejects extra or
+missing fields and unknown actions. Python validates task IDs against the current
+plan, derives required checks from each task, and supplies trusted arguments to
+read-only budget and schedule tools. A ticket requires a separate human approval
+for that task. `finish` requires all actionable tasks resolved and all required
+checks clear. Repeated invalid actions reach `MAX_AGENT_STEPS=6` and escalate to
+human review. Entering budget context is not ticket approval.
 
-### Configuration
+The CLI reads user-controlled `data/budgets.json` and `data/schedules.json` and
+writes `data/tickets.json` only after approval. Tests use temporary fixtures and
+do not modify runtime data. `/log` shows agent selections, tool observations,
+approval decisions, ticket creation, escalation, and finish for the current
+process. It is not persisted across restarts; copy it before exiting if an
+external audit record is needed. See `ANALYSIS.md` for assumptions and rollback.
 
-| LLM_PROVIDER | Behavior |
-|--------------|----------|
-| `mock` | Mock provider (no API calls) |
-| `qwen` | Qwen/Groq only |
-| `nex` | Nex/OpenRouter only |
-| `fallback` | Qwen primary, Nex fallback |
+## Scope
 
-## Runtime Operational Context
-
-Meeting notes do not always contain all operational data. OpsHub never invents missing operational values.
-
-**Budget sources:**
-- Runtime data files (data/budgets.json)
-- Explicit human input during CLI session
-
-**Important:** Human-provided context is separate from human approval. Entering a budget amount does NOT grant approval to create a ticket.
-
-**Local JSON files** are currently the simulation source for the internship MVP.
-
-## Not Implemented (Future)
-
-- Web frontend
-- Database
-- RAG/embeddings
-- Authentication
-- Networking
-- Native LLM tool calling
-- ReAct loop
-
-## Architecture
-
-```
-opshub/
-    ├── cli.py          # Interactive terminal interface
-    ├── agent.py        # Core orchestration
-    ├── models.py       # Type definitions
-    ├── policy.py       # Approval logic
-    └── llm/
-        ├── base.py     # LLMProvider interface
-        ├── mock.py     # Mock implementation
-        ├── qwen.py     # Qwen/Groq provider
-        ├── nex.py      # Nex/OpenRouter provider
-        ├── fallback.py # Fallback provider
-        └── exceptions.py # Custom exceptions
-    └── tools/
-        ├── budget.py   # Budget checks
-        ├── schedule.py # Schedule checks
-        └── ticket.py   # Ticket creation
-
-data/                 # JSON storage for ops data (user-controlled runtime)
-tests/
-    └── fixtures/     # Test fixtures (isolated from runtime)
-```
-
-## Running
-
-```bash
-python -m opshub.cli
-```
-
-### With Qwen Provider (Primary)
-
-```bash
-# Set environment variables
-export GROQ_API_KEY=your_key
-export MODEL_NAME=qwen/qwen3.8-27b
-export LLM_PROVIDER=qwen
-
-python -m opshub.cli
-```
-
-### With Automatic Fallback
-
-```bash
-# Set both providers
-export GROQ_API_KEY=your_key
-export MODEL_NAME=qwen/qwen3.8-27b
-export OPENROUTER_API_KEY=your_key
-export OPENROUTER_MODEL=nex-agi/nex-n2.5-pro:free
-export LLM_PROVIDER=fallback
-
-python -m opshub.cli
-```
-
-### With Fallback Only (for testing)
-
-```bash
-export OPENROUTER_API_KEY=your_key
-export OPENROUTER_MODEL=nex-agi/nex-n2.5-pro:free
-export LLM_PROVIDER=nex
-
-python -m opshub.cli
-```
-
-### Manual Test
-
-```bash
-export LLM_PROVIDER=mock
-python -m opshub.cli
-# Paste content from samples/grand_summit.txt
-# Type /run to generate plan
-# Follow budget input prompts
-# Type /run again after entering budget
-```
-
-## Human-in-the-loop Workflow
-
-**Safe workflow:**
-```
-Next Action: ready_to_create_ticket
-Create ticket for task_1?
-[y/N] > y
-Ticket OPS-001 created.
-Workflow completed.
-```
-
-**Blocked workflow with exception:**
-```
-Next Action: wait_for_human
-Blocking reasons:
-  - Budget insufficient for task_1
-Options:
-  [A] Approve exception
-  [R] Reject
-  [E] Exit
-
-> A
-Exception approved by human.
-Risk remains recorded.
-Create ticket for task_1?
-[y/N] > y
-Ticket OPS-002 created.
-Workflow completed.
-```
-
-## Development
-
-```bash
-# Setup
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Type check
-mypy opshub/
-```
-
-## License
-
-MIT
+This demo has no frontend, database, authentication, organization-system
+integration, or durable audit service. Run the full suite with `python -m pytest`.
