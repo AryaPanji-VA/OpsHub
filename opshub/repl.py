@@ -10,7 +10,7 @@ from opshub.checks import get_required_checks_for_task
 from opshub.cli import format_llm_error, prepare_runtime_context, run_workflow
 from opshub.llm import get_llm_provider
 from opshub.llm.exceptions import ConfigurationError, RecoverableLLMError
-from opshub.models import NextAction
+from opshub.models import NextAction, RuntimeContext
 
 
 _INTENTS = {
@@ -31,11 +31,13 @@ _INTENTS = {
     "status": "status", "show status": "status", "cek status": "status",
     "help": "help", "bantuan": "help",
     "exit": "exit", "quit": "exit", "keluar": "exit",
+    "new plan": "new plan", "new program": "new plan",
+    "ganti plan": "new plan",
 }
 
 _HELP = (
     "Commands: summary, tasks, check all, budget, schedule, tickets, "
-    "create tickets, status, help, exit"
+    "create tickets, status, new plan, help, exit"
 )
 _OUT_OF_SCOPE = (
     "This request is outside OpsHub's operational scope.\n\n"
@@ -60,6 +62,12 @@ def is_operational_notes(text: str) -> bool:
     normalized = text.casefold().strip()
     if parse_intent(normalized):
         return False
+    if normalized.endswith("?") or re.match(
+        r"^(what|why|how|who|when|where|apa|siapa|kapan|kenapa|mengapa|"
+        r"bagaimana|gimana|di mana|berapa)\b",
+        normalized,
+    ):
+        return False
     if re.match(
         r"^(?:(?:can|could) you\s+|please\s+|tolong\s+)?"
         r"(write|build|design|code|make|create|tell|explain|translate|"
@@ -67,13 +75,17 @@ def is_operational_notes(text: str) -> bool:
         normalized,
     ):
         return False
-    return bool(re.search(
+    signals = re.findall(
         r"\b(program|meeting|notes|rapat|notulensi|event|acara|budget|anggaran|"
         r"schedule|jadwal|task|tugas|vendor|peserta|logistik|finance|keuangan|"
         r"deadline|tenggat|catering|ticket|tiket|operational|operasional|"
         r"project|proyek|conference|summit|seminar|workshop|kegiatan|"
-        r"agenda|koordinasi|pelaksanaan|biaya|dana|lokasi)\b",
+        r"agenda|koordinasi|pelaksanaan|biaya|dana|lokasi|pic|divisi|division)\b",
         normalized,
+    )
+    return len(signals) >= 2 or bool(re.match(
+        r"^(rapat|notulensi|meeting notes|program|event|acara|proyek|project|"
+        r"kegiatan)\b.{15,}", normalized,
     ))
 
 
@@ -123,8 +135,8 @@ def _show_status(agent, check_results: dict):
     print(f"Next action: {plan.next_action.value}")
 
 
-def _show_tickets(agent):
-    tickets = [event["details"] for event in agent.audit_log.get_all()
+def _show_tickets(agent, plan_start: int):
+    tickets = [event["details"] for event in agent.audit_log.get_all()[plan_start:]
                if event["event"] == "ticket_created"]
     if not tickets:
         print("No tickets created in this session.")
@@ -133,33 +145,65 @@ def _show_tickets(agent):
         print(f"{ticket['ticket_id']}: {ticket['task_id']}")
 
 
+def _confirm_replace(agent) -> bool:
+    if agent.current_plan is None:
+        return True
+    try:
+        answer = input("Replace the current plan? [y/N] > ").strip().casefold()
+    except (EOFError, KeyboardInterrupt):
+        print("\nPlan replacement cancelled.")
+        return False
+    if answer != "y":
+        print("Current plan kept.")
+        return False
+    return True
+
+
+def _install_plan(agent, notes: str) -> bool:
+    """Reuse the extraction pipeline and commit new session state on success."""
+    if not notes:
+        print("No meeting notes provided. Current plan kept.")
+        return False
+    if not is_operational_notes(notes):
+        print(_OUT_OF_SCOPE)
+        return False
+    previous_notes = agent.current_notes
+    previous_context = agent.runtime_context
+    agent.runtime_context = RuntimeContext()
+    agent.ingest_notes(notes)
+    try:
+        plan = agent.generate_plan()
+    except (ConfigurationError, RecoverableLLMError) as error:
+        agent.current_notes = previous_notes
+        agent.runtime_context = previous_context
+        print(format_llm_error(error))
+        print("Current plan kept.")
+        return False
+    print(f"\nPlan ready: {plan.program}")
+    return True
+
+
 def main() -> int:
     load_dotenv()
     print("OpsHub Agent")
     print("Operational AI for SGA\n")
     try:
+        agent = OpsHubAgent(llm_provider=get_llm_provider())
+    except (ConfigurationError, RecoverableLLMError) as error:
+        print(format_llm_error(error))
+        return 1
+    try:
         notes = _read_notes()
     except (EOFError, KeyboardInterrupt):
         print("\nGoodbye!")
         return 0
-    if not notes:
-        print("No meeting notes provided.")
-        return 0
-    if not is_operational_notes(notes):
-        print(_OUT_OF_SCOPE)
-        return 0
-
-    try:
-        agent = OpsHubAgent(llm_provider=get_llm_provider())
-        agent.ingest_notes(notes)
-        plan = agent.generate_plan()
-    except (ConfigurationError, RecoverableLLMError) as error:
-        print(format_llm_error(error))
-        return 1
-
-    print(f"\nPlan ready: {plan.program}")
+    if notes:
+        _install_plan(agent, notes)
+    else:
+        print("No current plan. Enter operational notes or use 'new plan'.")
     print(_HELP)
     check_results = {"budget": [], "schedule": []}
+    plan_start = len(agent.audit_log.events) - 1 if agent.current_plan else 0
     while True:
         try:
             command = input("opshub> ")
@@ -172,7 +216,32 @@ def main() -> int:
             return 0
         if intent == "help":
             print(_HELP)
-        elif intent == "summary":
+            continue
+        if intent == "new plan":
+            if not _confirm_replace(agent):
+                continue
+            try:
+                replacement = _read_notes()
+            except (EOFError, KeyboardInterrupt):
+                print("\nPlan replacement cancelled.")
+                continue
+            if _install_plan(agent, replacement):
+                check_results = {"budget": [], "schedule": []}
+                plan_start = len(agent.audit_log.events) - 1
+            continue
+        if intent is None and is_operational_notes(command):
+            if _confirm_replace(agent) and _install_plan(agent, command.strip()):
+                check_results = {"budget": [], "schedule": []}
+                plan_start = len(agent.audit_log.events) - 1
+            continue
+        if intent is None:
+            print(_OUT_OF_SCOPE)
+            continue
+        plan = agent.current_plan
+        if plan is None:
+            print("No current plan. Enter operational notes or use 'new plan'.")
+            continue
+        if intent == "summary":
             print(f"{plan.program}: {plan.summary}")
         elif intent == "tasks":
             if not plan.tasks:
@@ -185,7 +254,7 @@ def main() -> int:
             for check in selected or {"budget", "schedule"}:
                 check_results[check] = new_results[check]
         elif intent == "tickets":
-            _show_tickets(agent)
+            _show_tickets(agent, plan_start)
         elif intent == "create tickets":
             if plan.next_action == NextAction.COMPLETED:
                 print("Workflow already completed.")
@@ -196,8 +265,6 @@ def main() -> int:
                 run_workflow(agent)
         elif intent == "status":
             _show_status(agent, check_results)
-        else:
-            print(_OUT_OF_SCOPE)
 
 
 if __name__ == "__main__":

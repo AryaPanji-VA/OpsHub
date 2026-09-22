@@ -63,11 +63,16 @@ prompt `opshub>` muncul, gunakan perintah berikut:
 | `summary`, `tasks` | Ringkasan program dan daftar tugas |
 | `check all`, `budget`, `schedule` | Pemeriksaan baca-saja yang sesuai |
 | `tickets`, `create tickets` | Tiket sesi ini dan alur usulan dengan persetujuan manusia |
+| `new plan`, `new program`, `ganti plan` | Masukkan notulensi baru dalam beberapa baris; baris kosong mengakhiri masukan |
 | `status`, `help`, `exit` | Status, bantuan, dan keluar |
 
 Alias sederhana juga tersedia, misalnya `show tasks`, `recap`, `cek budget`,
-`cek jadwal`, `buat ticket`, dan `keluar`. Perintah di luar koordinasi
-operasional ditolak tanpa dikirim ke model. Antarmuka ini bukan chatbot umum.
+`cek jadwal`, `buat ticket`, dan `keluar`. Narasi rapat atau program dapat
+dimasukkan langsung di `opshub>`. Jika sudah ada rencana, OpsHub meminta
+konfirmasi sebelum menggantinya. Rencana baru memakai alur ekstraksi yang sama;
+anggaran, jadwal, hasil pemeriksaan, dan persetujuan sesi lama direset. Perintah
+di luar koordinasi operasional ditolak tanpa dikirim ke model. Antarmuka ini
+bukan chatbot umum.
 CLI lama masih menerima `/run`, `/log`, `/new`, `/plan`, dan `/exit`.
 
 Pilihan provider adalah `mock`, `qwen` (Qwen melalui Groq), `nex` (Nex melalui

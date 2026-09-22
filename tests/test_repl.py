@@ -9,6 +9,7 @@ import pytest
 
 from opshub import repl
 from opshub.agent import OpsHubAgent
+from opshub.llm.exceptions import RecoverableLLMError
 from opshub.models import NextAction
 from tests.test_runtime_flow import ScriptedProvider, action
 
@@ -26,6 +27,27 @@ class CountingProvider(ScriptedProvider):
     def choose_next_action(self, plan, observations, runtime_context):
         self.action_calls += 1
         return super().choose_next_action(plan, observations, runtime_context)
+
+
+class ChangingProvider(CountingProvider):
+    def generate_plan(self, notes):
+        plan = super().generate_plan(notes)
+        if "Cakrawala" in notes:
+            plan.program = "Cakrawala Tech Expo"
+            plan.summary = "New event coordination"
+        return plan
+
+
+def run_session(monkeypatch, tmp_path, capsys, answers, provider=None):
+    provider = provider or ChangingProvider()
+    agent = OpsHubAgent(llm_provider=provider, tickets_file=tmp_path / "tickets.json")
+    monkeypatch.setattr(repl, "get_llm_provider", lambda: provider)
+    monkeypatch.setattr(repl, "OpsHubAgent", lambda llm_provider: agent)
+    monkeypatch.setattr("opshub.tools.schedule.DATA_FILE", tmp_path / "schedules.json")
+    prompts = iter(answers)
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
+    assert repl.main() == 0
+    return agent, provider, capsys.readouterr().out
 
 
 def run_repl(monkeypatch, tmp_path, capsys, commands, actions=()):
@@ -51,13 +73,16 @@ def test_launch_extracts_plan_and_enters_repl(monkeypatch, tmp_path, capsys):
 
 
 def test_python_module_and_console_script_entrypoints(monkeypatch):
-    monkeypatch.setattr(repl, "main", lambda: 0)
+    # `python -m opshub` now launches the TUI (opshub/__main__.py), so stub
+    # the TUI main; the plain-CLI entry point is asserted via pyproject below.
+    monkeypatch.setattr("opshub.tui.app.main", lambda: 0)
     with pytest.raises(SystemExit) as stopped:
         runpy.run_module("opshub", run_name="__main__")
     assert stopped.value.code == 0
     project = Path(__file__).parent.parent
     metadata = tomllib.loads((project / "pyproject.toml").read_text())
-    assert metadata["project"]["scripts"]["opshub"] == "opshub.repl:main"
+    assert metadata["project"]["scripts"]["opshub"] == "opshub.tui.app:main"
+    assert metadata["project"]["scripts"]["opshub-cli"] == "opshub.repl:main"
 
 
 def test_summary_and_tasks_commands(monkeypatch, tmp_path, capsys):
@@ -150,9 +175,115 @@ def test_out_of_scope_request_never_reaches_action_model(monkeypatch, tmp_path, 
 def test_out_of_scope_initial_request_never_reaches_plan_model(monkeypatch, capsys):
     provider = CountingProvider()
     monkeypatch.setattr(repl, "get_llm_provider", lambda: provider)
-    answers = iter(["write me a portfolio website", ""])
+    answers = iter(["write me a portfolio website", "", "exit"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     assert repl.main() == 0
     assert "outside OpsHub's operational scope" in capsys.readouterr().out
     assert provider.plan_calls == 0
     assert provider.action_calls == 0
+
+
+@pytest.mark.parametrize("alias", ["new plan", "new program", "ganti plan"])
+def test_new_plan_aliases_enter_multiline_input(monkeypatch, tmp_path, capsys, alias):
+    agent, provider, output = run_session(
+        monkeypatch, tmp_path, capsys,
+        ["meeting notes", "", alias, "y", "Rapat persiapan Cakrawala Tech Expo 2026",
+         "PIC logistik menyiapkan lokasi.", "", "summary", "exit"],
+    )
+    assert provider.plan_calls == 2
+    assert agent.current_plan.program == "Cakrawala Tech Expo"
+    assert "Cakrawala Tech Expo: New event coordination" in output
+
+
+def test_direct_operational_narrative_replaces_after_confirmation(monkeypatch, tmp_path, capsys):
+    agent, provider, output = run_session(
+        monkeypatch, tmp_path, capsys,
+        ["meeting notes", "", "Rapat persiapan Cakrawala Tech Expo 2026", "y",
+         "tasks", "summary", "exit"],
+    )
+    assert provider.plan_calls == 2
+    assert agent.current_plan.program == "Cakrawala Tech Expo"
+    assert "task_1: Fund event" in output
+    assert "Cakrawala Tech Expo: New event coordination" in output
+
+
+def test_rejected_replacement_keeps_current_plan(monkeypatch, tmp_path, capsys):
+    agent, provider, output = run_session(
+        monkeypatch, tmp_path, capsys,
+        ["meeting notes", "", "Rapat persiapan Cakrawala Tech Expo 2026", "n",
+         "summary", "exit"],
+    )
+    assert provider.plan_calls == 1
+    assert agent.current_plan.program == "Internship"
+    assert agent.current_notes == "meeting notes"
+    assert "Current plan kept." in output
+    assert "Internship: Two operational tasks" in output
+
+
+def test_replacement_resets_plan_state_and_preserves_provider(monkeypatch, tmp_path, capsys):
+    agent, provider, output = run_session(
+        monkeypatch, tmp_path, capsys,
+        ["meeting notes", "", "check all", "2", "15000000", "new plan", "y",
+         "Rapat persiapan Cakrawala Tech Expo 2026", "", "status", "tickets", "exit"],
+    )
+    assert provider.plan_calls == 2
+    assert agent.llm_provider is provider
+    assert agent.current_plan.program == "Cakrawala Tech Expo"
+    assert agent.runtime_context.available_budget is None
+    assert agent.runtime_context.schedule_entries is None
+    assert agent.tool_dispatcher.runtime_context is agent.runtime_context
+    assert agent.approvals == []
+    assert agent.observations == []
+    assert agent.executed_actions == {}
+    assert agent.created_ticket_tasks == set()
+    assert "Checks completed: 2/2" not in output
+    assert "Checks completed: 0/2" in output
+    assert "No tickets created in this session." in output
+
+
+def test_direct_narrative_without_current_plan_parses_immediately(monkeypatch, tmp_path, capsys):
+    agent, provider, output = run_session(
+        monkeypatch, tmp_path, capsys,
+        ["", "Rapat persiapan Cakrawala Tech Expo 2026", "summary", "exit"],
+    )
+    assert provider.plan_calls == 1
+    assert agent.current_plan.program == "Cakrawala Tech Expo"
+    assert "Cakrawala Tech Expo: New event coordination" in output
+
+
+def test_failed_replacement_keeps_prior_plan_and_context(tmp_path, capsys):
+    class FailingReplacementProvider(ChangingProvider):
+        def generate_plan(self, notes):
+            if "Cakrawala" in notes:
+                raise RecoverableLLMError("Temporary provider failure")
+            return super().generate_plan(notes)
+
+    provider = FailingReplacementProvider()
+    agent = OpsHubAgent(llm_provider=provider, tickets_file=tmp_path / "tickets.json")
+    agent.ingest_notes("meeting notes")
+    original_plan = agent.generate_plan()
+    agent.set_budget(15_000_000)
+    original_context = agent.runtime_context
+
+    assert not repl._install_plan(agent, "Rapat persiapan Cakrawala Tech Expo 2026")
+    assert agent.current_plan is original_plan
+    assert agent.current_notes == "meeting notes"
+    assert agent.runtime_context is original_context
+    assert agent.tool_dispatcher.runtime_context is original_context
+    assert "Current plan kept." in capsys.readouterr().out
+
+
+def test_general_request_without_plan_stays_out_of_scope(monkeypatch, tmp_path, capsys):
+    agent, provider, output = run_session(
+        monkeypatch, tmp_path, capsys,
+        ["", "write me a portfolio website", "exit"],
+    )
+    assert provider.plan_calls == 0
+    assert agent.current_plan is None
+    assert "outside OpsHub's operational scope" in output
+
+
+@pytest.mark.parametrize("message", ["What is a budget?", "Bagaimana membuat jadwal?",
+                                      "Tell me about meeting notes"])
+def test_general_questions_are_not_operational_narratives(message):
+    assert not repl.is_operational_notes(message)
