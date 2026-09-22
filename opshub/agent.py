@@ -139,6 +139,9 @@ class OpsHubAgent:
         self.executed_actions: Dict[Tuple[str, str], int] = {}
         self.created_ticket_tasks: set[str] = set()
         self.tool_dispatcher: Optional[ToolDispatcher] = None
+        # Bounded autonomy: True only when the last run ended by step limit.
+        self.workflow_paused: bool = False
+        self.paused_reason: Optional[str] = None
 
     def set_budget(self, available: float, source: ContextSource = ContextSource.HUMAN):
         """Set budget context for this session."""
@@ -170,6 +173,8 @@ class OpsHubAgent:
         self.observations = []
         self.executed_actions = {}
         self.created_ticket_tasks = set()
+        self.workflow_paused = False
+        self.paused_reason = None
         self.audit_log.add("plan_generated", {"program": self.current_plan.program})
         self.tool_dispatcher = ToolDispatcher(self.current_plan, self.runtime_context)
         return self.current_plan
@@ -400,6 +405,10 @@ class OpsHubAgent:
             return False, []
 
         self.audit_log.add("agent_loop_started", {"max_steps": MAX_AGENT_STEPS})
+        # Each run starts unpaused; only a step-limit exit sets the pause flag,
+        # so it always reflects the outcome of the most recent run.
+        self.workflow_paused = False
+        self.paused_reason = None
 
         last_action: Optional[AgentActionModel] = None
 
@@ -634,7 +643,48 @@ class OpsHubAgent:
         )
         if self.current_plan:
             self.current_plan.next_action = NextAction.WAIT_FOR_HUMAN
+        self.workflow_paused = True
+        self.paused_reason = "step_limit"
+        self.audit_log.add(
+            "workflow_paused",
+            {
+                "reason": "step_limit",
+                "preserved_observations": len(self.observations),
+                "executed_checks": len(self.executed_actions),
+            },
+        )
         return True, self.observations
+
+    def resume_workflow(self) -> Tuple[bool, List[AgentObservation]]:
+        """
+        Continue a workflow paused by the step limit.
+
+        Reuses the current plan, observations, executed checks, approvals, and
+        tickets. Grants up to another MAX_AGENT_STEPS autonomous actions; it
+        does not approve tickets or override any HITL rule.
+        Returns (False, []) when there is no paused workflow.
+        """
+        if not self.current_plan or not self.workflow_paused:
+            return False, []
+        self.audit_log.add(
+            "workflow_resumed",
+            {
+                "preserved_observations": len(self.observations),
+                "executed_checks": len(self.executed_actions),
+                "tickets_created": len(self.created_ticket_tasks),
+            },
+        )
+        return self.run_agent_loop()
+
+    def count_missing_checks(self) -> int:
+        """Count remaining required read-only checks across the current plan."""
+        if not self.current_plan:
+            return 0
+        return sum(
+            1 for task in self.current_plan.tasks
+            for check, status in get_check_states_for_task(task, self.observations).items()
+            if status == "missing"
+        )
 
     def request_approval(self, task_id: str, action: str, reason: Optional[str] = None) -> Approval:
         approval = Approval(

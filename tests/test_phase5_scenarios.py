@@ -123,8 +123,14 @@ def test_step_limit_audit_escalates(tmp_path):
     agent.run_agent_loop()
     assert MAX_AGENT_STEPS == 6
     assert events(agent).count("task_id_validation_failed") == MAX_AGENT_STEPS
-    assert agent.audit_log.get_all()[-1] == {
+    assert {
         "event": "agent_step_limit_reached",
         "details": {"step": MAX_AGENT_STEPS, "next_action": "wait_for_human"},
+    } in agent.audit_log.get_all()
+    # Phase 7.5: the step limit now records a resumable pause.
+    assert agent.audit_log.get_all()[-1] == {
+        "event": "workflow_paused",
+        "details": {"reason": "step_limit", "preserved_observations": 6,
+                    "executed_checks": 0},
     }
     assert agent.current_plan.next_action == NextAction.WAIT_FOR_HUMAN

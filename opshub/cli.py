@@ -15,6 +15,8 @@ def parse_budget_input(value: str) -> float:
     value = value.strip()
     if re.match(r"^\d{1,3}(\.\d{3})+$", value):
         value = value.replace(".", "")
+    if re.match(r"^\d{1,3}(,\d{3})+$", value):
+        value = value.replace(",", "")
     value = value.replace("_", "")
     try:
         amount = float(value)
@@ -173,7 +175,18 @@ def run_workflow(agent):
                         print(f"  - {obs.action} for {obs.task_id}: {obs.message}")
             elif any(e["event"] in {"agent_step_limit_reached", "agent_stalled"}
                      for e in agent.audit_log.events[-2:]):
-                print("Agent could not complete the workflow. Human review required.")
+                if agent.workflow_paused:
+                    print(
+                        "\nAUTONOMOUS RUN PAUSED\n"
+                        "\n"
+                        "The six-step safety limit was reached.\n"
+                        "Completed work has been preserved.\n"
+                        "\n"
+                        "Type 'continue' to resume from the current state.\n"
+                        "Type 'status' to inspect remaining work."
+                    )
+                else:
+                    print("Agent could not complete the workflow. Human review required.")
             break
 
         proposal = next(o for o in reversed(new_observations)

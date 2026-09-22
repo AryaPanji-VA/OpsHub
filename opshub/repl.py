@@ -5,7 +5,7 @@ import re
 
 from dotenv import load_dotenv
 
-from opshub.agent import OpsHubAgent
+from opshub.agent import MAX_AGENT_STEPS, OpsHubAgent
 from opshub.checks import get_required_checks_for_task
 from opshub.cli import format_llm_error, prepare_runtime_context, run_workflow
 from opshub.llm import get_llm_provider
@@ -29,6 +29,7 @@ _INTENTS = {
     "create tickets": "create tickets", "create ticket": "create tickets",
     "buat ticket": "create tickets", "buat tiket": "create tickets",
     "status": "status", "show status": "status", "cek status": "status",
+    "continue": "continue", "resume": "continue", "lanjut": "continue",
     "help": "help", "bantuan": "help",
     "exit": "exit", "quit": "exit", "keluar": "exit",
     "new plan": "new plan", "new program": "new plan",
@@ -37,7 +38,7 @@ _INTENTS = {
 
 _HELP = (
     "Commands: summary, tasks, check all, budget, schedule, tickets, "
-    "create tickets, status, new plan, help, exit"
+    "create tickets, status, continue, new plan, help, exit"
 )
 _OUT_OF_SCOPE = (
     "This request is outside OpsHub's operational scope.\n\n"
@@ -132,7 +133,12 @@ def _show_status(agent, check_results: dict):
     print(f"Checks completed: {completed}/{len(required)}")
     print(f"Unresolved tasks: {', '.join(unresolved) if unresolved else 'none'}")
     print(f"Tickets created this session: {len(agent.created_ticket_tasks)}")
-    print(f"Next action: {plan.next_action.value}")
+    if agent.workflow_paused:
+        print(f"Workflow: paused — type 'continue' to resume (up to "
+              f"{MAX_AGENT_STEPS} more actions)")
+    print(f"Remaining checks: {agent.count_missing_checks()}")
+    print(f"Next action: {plan.next_action.value}"
+          + (" ('continue' available)" if agent.workflow_paused else ""))
 
 
 def _show_tickets(agent, plan_start: int):
@@ -234,6 +240,18 @@ def main() -> int:
                 check_results = {"budget": [], "schedule": []}
                 plan_start = len(agent.audit_log.events) - 1
             continue
+        if intent == "continue":
+            plan = agent.current_plan
+            if plan is None:
+                print("No current plan. Enter operational notes or use 'new plan'.")
+            elif plan.next_action == NextAction.COMPLETED:
+                print("Workflow already completed.")
+            elif not agent.workflow_paused:
+                print("No paused workflow to continue.")
+            else:
+                prepare_runtime_context(agent, plan)
+                run_workflow(agent)
+            continue
         if intent is None:
             print(_OUT_OF_SCOPE)
             continue
@@ -259,7 +277,13 @@ def main() -> int:
             if plan.next_action == NextAction.COMPLETED:
                 print("Workflow already completed.")
             elif plan.next_action == NextAction.WAIT_FOR_HUMAN and agent.observations:
-                print("Human review is required before continuing.")
+                if agent.workflow_paused:
+                    print(
+                        "AUTONOMOUS RUN PAUSED: the six-step safety limit was reached; "
+                        "completed work is preserved. Type 'continue' to resume."
+                    )
+                else:
+                    print("Human review is required before continuing.")
             else:
                 prepare_runtime_context(agent, plan)
                 run_workflow(agent)

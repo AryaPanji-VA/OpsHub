@@ -1,94 +1,93 @@
-# Analisis Pengumpulan: OpsHub Agent
+# Analisis OpsHub Agent
 
-## 1. Masalah utama dan akar penyebab
+## 1. Masalah Utama
 
-Rencana operasional sering bermula dari cerita dalam rapat, lalu tersebar ke
-chat, notulensi, dan spreadsheet. Sebuah tugas bisa tidak memiliki penanggung
-jawab yang jelas. Batas anggaran dapat tertahan di divisi Keuangan, sedangkan
-tenggat tidak sampai ke divisi yang menghubungi vendor. Informasi yang tidak
-tersampaikan antardivisi menyebabkan pekerjaan ganda, kepemilikan tugas yang
-kabur, dan keputusan operasional sebelum anggaran atau jadwal diperiksa. Akar
-masalahnya adalah koordinasi yang terpecah dan sulit ditelusuri.
+Koordinasi operasional sering dimulai dari notulensi rapat yang berbentuk
+narasi, lalu tersebar ke chat dan spreadsheet. Informasi penting—tugas, PIC,
+divisi, tenggat, kebutuhan anggaran, dan jadwal—mudah terlewat atau tidak sampai
+ke pihak yang tepat. Akibatnya, pekerjaan dapat berjalan tanpa pemeriksaan
+anggaran/jadwal, kepemilikan tugas menjadi kabur, dan keputusan sulit ditelusuri.
 
-OpsHub Agent adalah prototipe magang yang membuat tugas dan batasan tersebut
-lebih eksplisit, memeriksanya dengan data yang tersedia, lalu meminta keputusan
-manusia sebelum membuat tiket. Ini bukan sistem operasional perusahaan yang
-siap dipakai untuk produksi.
+OpsHub ditujukan untuk memperkecil celah tersebut: mengubah narasi menjadi
+`OperationalPlan`, menjalankan pemeriksaan operasional yang relevan, dan
+membuat handoff berupa tiket. Masalah ini tidak cukup diselesaikan dengan LLM
+yang bebas bertindak karena hasil model tetap dapat salah, konteks runtime dapat
+tidak lengkap, dan pembuatan tiket merupakan perubahan state. Karena itu,
+sistem harus transparan, dibatasi, dan tetap menempatkan manusia sebagai
+pengambil keputusan untuk aksi berisiko.
 
-## 2. Keputusan solusi dan alasan arsitektur
+## 2. Keputusan Solusi
 
-Antarmuka terminal dipilih agar aksi, hasil, dan persetujuan mudah diamati serta
-cepat dijalankan secara lokal. Putaran ReAct-lite memberi ruang bagi model
-untuk memilih urutan aksi tanpa memerlukan framework agen yang berat. Keluaran
-terstruktur dan validasi Pydantic membatasi bentuk data dari model. Python
-menjalankan tool secara deterministik: model mengusulkan **apa** yang dilakukan,
-sedangkan Python menentukan **bagaimana** dan **apakah** aksi boleh dilakukan.
+OpsHub dibangun sebagai **terminal-native bounded operational AI agent**.
+Textual TUI menjadi antarmuka utama dengan branding OpsHub, input notulensi,
+pilihan sumber anggaran, approval modal, serta view `PLAN`, `TASKS`, `ACTIVITY`,
+dan `TICKETS` yang dapat di-scroll. REPL dan CLI lama dipertahankan sebagai
+fallback agar alur tetap dapat digunakan pada terminal sederhana.
 
-`LLMProvider` mengekstrak `OperationalPlan` dari notulensi dan memilih
-`AgentActionModel` yang hanya berisi `action`, `task_id`, dan `reason`. Model
-tidak dapat memberikan argumen tool bebas atau menulis tiket. Python memeriksa
-ID tugas, menentukan kebutuhan pemeriksaan dari data tugas tersebut, lalu
-menjalankan pemeriksaan anggaran dan jadwal dengan konteks runtime yang
-tepercaya. Usulan pembuatan tiket saja tidak menulis apa pun: tiap tiket
-memerlukan persetujuan manusia yang terpisah. `finish` hanya diterima ketika
-pemeriksaan yang diperlukan jelas dan semua tugas yang perlu ditangani sudah
-memiliki tiket.
+Alur inti memakai ReAct-lite. LLM mengekstraksi plan dan memilih aksi
+terstruktur (`action`, `task_id`, `reason`), sedangkan Python memvalidasi ID
+tugas, menentukan check yang diperlukan, mengambil argumen tepercaya, dan
+menjalankan tool `check_budget`, `check_schedule`, atau `create_ticket`.
+Pemisahan ini mencegah model mengirim argumen tool bebas atau menyetujui
+tiketnya sendiri. Qwen/Groq menjadi provider utama dan Nex/OpenRouter menjadi
+fallback; provider mock mendukung demo/test deterministik.
 
-Setiap pemanggilan putaran agen dibatasi enam langkah agar aksi keliru tidak
-terus menghabiskan token. Jika tidak selesai, status menjadi `wait_for_human`;
-pengulangan `finish` yang tidak valid dapat dihentikan lebih awal. Konteks
-ringkas per tugas menunjukkan pemeriksaan yang sudah jelas dan yang masih
-kurang sehingga model tidak perlu mengulang pemeriksaan yang sama.
+`RuntimeContext` menyimpan anggaran tersedia, entri jadwal, dan sumber masing-
+masing data. Di TUI, anggaran dapat dipilih dari data runtime atau dimasukkan
+manual. Input tersebut adalah konteks operasional, bukan persetujuan. Jika
+jadwal runtime kosong, pengguna dapat menambah booking sesi atau menyatakan
+bahwa tidak ada entri lain yang diketahui. Hasilnya tetap hanya merepresentasikan
+data yang tersedia, bukan kalender organisasi yang lengkap.
 
-Qwen melalui Groq adalah provider utama dan Nex melalui OpenRouter menjadi
-cadangan saat terjadi kegagalan provider yang dapat ditangani. Kegagalan saat
-ekstraksi rencana atau pemilihan aksi tidak mengizinkan pembuatan tiket.
-Provider mock dan skenario terprogram membuat alur inti dapat diuji tanpa
-jaringan. Arsitektur ini tidak mewajibkan layanan berbayar, tetapi ketersediaan
-dan batas paket gratis berada di luar kendali proyek.
+Human-in-the-loop diterapkan pada pembuatan tiket dan keputusan berisiko. Tiap
+proposal tiket memerlukan approval per tugas; penolakan tidak membuat tiket.
+Pemeriksaan gagal atau konteks penting yang hilang mengalihkan alur ke tinjauan
+manusia. `finish` hanya sah ketika checks yang dibutuhkan jelas dan seluruh
+tugas actionable sudah ditangani.
 
-Anggaran dan jadwal dapat berasal dari berkas JSON simulasi atau masukan
-eksplisit selama sesi. Konteks operasional ini dipisahkan dari isi notulensi
-dan dari persetujuan: memasukkan anggaran bukan izin membuat tiket. Jadwal
-kosong menghasilkan kesimpulan tidak ada bentrok yang **diketahui**, bukan
-bukti bahwa seluruh kalender sudah lengkap.
+Otonomi dibatasi `MAX_AGENT_STEPS=6` per run. Ketika batas tercapai, workflow
+menjadi pause, bukan selesai: plan, observasi, hasil check, approval, dan tiket
+dipertahankan. `continue`, `resume`, atau `lanjut` memberi maksimal enam langkah
+baru pada state yang sama dan tidak melewati aturan approval. Audit sesi mencatat
+pemilihan aksi, hasil tool, approval/penolakan, pembuatan tiket, step limit,
+pause, resume, kegagalan, dan status akhir yang terkontrol.
 
-## 3. Asumsi dan celah dalam brief
+## 3. Asumsi & Celah Brief
 
-- Sumber keuangan dan kalender masih disimulasikan atau diberikan saat
-  aplikasi berjalan; otoritas serta kesegaran datanya belum dijamin.
-- Divisi, PIC, anggaran, atau tenggat bisa tidak disebut dalam notulensi.
-  Nilai yang tidak diketahui dibiarkan kosong, bukan dikarang model.
-- Konteks penting yang hilang mengarah ke tinjauan manusia. Pada CLI,
-  pengguna diminta memasukkan anggaran jika dibutuhkan.
-- Rencana dan aksi dari model divalidasi sebelum Python menjalankan tool.
-  Skema yang valid saja tidak berarti sebuah tiket boleh dibuat.
-- JSON lokal cukup untuk menunjukkan penulisan setelah persetujuan, tetapi
-  belum menyediakan state bersama atau perlindungan penulis bersamaan.
+- Notulensi diasumsikan cukup untuk mengekstraksi sebagian besar struktur
+  program, tetapi field yang tidak diketahui seharusnya tetap kosong dan tidak
+  dikarang model.
+- Data anggaran dan jadwal diasumsikan berasal dari file runtime atau input
+  manusia yang dipercaya untuk sesi tersebut. Otoritas, kesegaran, dan
+  kelengkapannya belum dapat diverifikasi oleh aplikasi.
+- Jadwal kosong berarti tidak ada bentrok yang diketahui; itu bukan bukti
+  ketersediaan pada kalender nyata.
+- JSON lokal dianggap cukup untuk mendemonstrasikan ticket creation setelah
+  approval, tetapi bukan shared state yang aman untuk banyak pengguna.
+- Audit di memori cukup untuk transparansi demo, tetapi belum memenuhi kebutuhan
+  retensi, kepatuhan, atau investigasi setelah proses berhenti.
+- Brief tidak menetapkan identitas pengguna, role, sumber data organisasi,
+  aturan eskalasi, SLA, atau definisi aksi berisiko selain ticket creation.
+  Implementasi memilih batas konservatif: ketidakjelasan atau check gagal
+  berhenti pada human review.
+- Pause/resume mempertahankan state hanya selama proses berjalan. Restart
+  aplikasi membuat sesi baru karena session persistence belum tersedia.
 
-## 4. Lingkup yang sengaja tidak dibuat
+## 4. Batasan yang Ditetapkan
 
-Prototipe ini tidak mengeksekusi pembayaran, membatalkan vendor,
-menandatangani kontrak, mengintegrasikan kalender penuh atau sistem akuntansi,
-menyediakan frontend, menyimpan audit perusahaan secara persisten, ataupun
-menjalankan rollback otomatis. Autentikasi dan database juga berada di luar
-lingkup MVP. Tindakan berisiko dan keputusan atas sistem organisasi tetap
-dikendalikan manusia; proyek ini tidak mengklaim akses ke sistem tersebut.
+MVP sengaja dibatasi pada antarmuka terminal, ekstraksi plan, tiga tool lokal,
+ReAct-lite, approval manusia, dan audit sesi. Sistem tidak mengklaim memiliki
+integrasi kalender nyata, data keuangan langsung, frontend web, autentikasi,
+database, atau koneksi ke sistem eksternal/organisasi.
 
-## 5. Keterlacakan dan rollback
+Rollback dan transaksi otomatis tidak diimplementasikan. Berkas tiket lokal
+juga belum memiliki locking atau proteksi concurrent writer, sehingga tidak
+aman dijadikan penyimpanan produksi. Audit hanya berada di memori, dan state
+sesi—plan, konteks runtime, observasi, approval, tiket sesi, serta posisi
+workflow—tidak dipersistenkan untuk dipulihkan setelah restart.
 
-Selama proses berjalan, audit di memori mencatat pemilihan aksi model,
-observasi dan hasil tool, aksi tidak valid, permintaan tinjauan manusia,
-keputusan persetujuan, pembuatan tiket, serta status akhir yang terkontrol.
-Perintah `/log` pada CLI lama menampilkannya; REPL baru menampilkan ringkasan
-melalui `status` dan `tickets`. Pengujian skenario memverifikasi bahwa alur
-aman membuat dua tiket yang disetujui, sedangkan alur yang terblokir tidak
-membuat tiket baru. Audit hilang saat CLI ditutup; ini belum menjadi catatan
-kepatuhan yang tahan lama.
-
-Rollback transaksi otomatis **belum diimplementasikan**. Berkas tiket lokal
-juga belum aman untuk beberapa penulis bersamaan. Untuk pemulihan manual saat
-demo, manusia dapat memeriksa audit dan memulihkan salinan berkas tiket yang
-diketahui baik setelah memastikan tidak ada penulis lain yang mengubahnya.
-Pengembangan untuk produksi membutuhkan audit persisten, penulisan idempoten,
-kontrol akses, serta prosedur kompensasi atau rollback yang jelas.
+OpsHub tidak mengeksekusi pembayaran, membatalkan vendor, menandatangani
+kontrak, atau melakukan aksi bisnis berisiko lain. Untuk penggunaan produksi
+diperlukan minimal autentikasi dan otorisasi, database/transaksi yang aman,
+audit persisten, idempotensi, kontrol konkurensi, integrasi sumber data resmi,
+serta strategi kompensasi atau rollback yang eksplisit.
