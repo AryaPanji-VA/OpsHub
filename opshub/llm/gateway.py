@@ -9,15 +9,16 @@ import httpx
 from opshub.llm.base import LLMProvider
 from opshub.llm.exceptions import ConfigurationError, RecoverableLLMError
 from opshub.models import AgentActionModel, AgentObservation, OperationalPlan, RuntimeContext
+from opshub.config import gateway_url
 
 
 def gateway_configured() -> bool:
-    return bool(os.getenv("OPSHUB_GATEWAY_URL", "").strip())
+    return os.getenv("LLM_PROVIDER", "").lower() != "mock" and bool(gateway_url())
 
 
 class GatewayProvider(LLMProvider):
     def __init__(self, url: str | None = None):
-        origin = (url or os.getenv("OPSHUB_GATEWAY_URL", "")).strip().rstrip("/")
+        origin = (url if url is not None else gateway_url()).strip().rstrip("/")
         parsed = urlparse(origin)
         if not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
             raise ConfigurationError("Invalid gateway origin", provider="gateway", category="configuration")

@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch, MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from opshub.llm.mock import MockLLMProvider
-from opshub.llm import get_llm_provider
+from opshub.llm import get_llm_provider, get_direct_llm_provider
 
 
 def test_mock_provider_returns_plan():
@@ -65,7 +65,7 @@ def test_extra_fields_rejected(monkeypatch):
 def test_provider_selection_unknown():
     with patch.dict(os.environ, {"LLM_PROVIDER": "unknown"}):
         try:
-            get_llm_provider()
+            get_direct_llm_provider()
             assert False, "Should raise ValueError"
         except ValueError as e:
             assert "Unknown LLM_PROVIDER" in str(e)

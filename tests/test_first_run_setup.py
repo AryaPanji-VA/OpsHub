@@ -125,7 +125,7 @@ def test_existing_config_skips_setup(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_launcher_routes_first_run_and_forced_setup(monkeypatch, tmp_path):
+def test_launcher_uses_default_gateway_and_forced_setup(monkeypatch, tmp_path):
     isolated_config(monkeypatch, tmp_path)
     launched = []
 
@@ -139,7 +139,7 @@ def test_launcher_routes_first_run_and_forced_setup(monkeypatch, tmp_path):
     monkeypatch.setattr(tui_app, "OpsHubApp", StubApp)
     monkeypatch.setattr("sys.argv", ["opshub"])
     assert tui_app.main() == 0
-    assert launched[-1]["setup_required"] is True
+    assert launched[-1]["setup_required"] is False
     config.save_credentials("sample-groq", "")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)

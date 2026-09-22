@@ -8,6 +8,12 @@ from dotenv import load_dotenv
 
 
 _CREDENTIAL_KEYS = ("GROQ_API_KEY", "OPENROUTER_API_KEY", "LLM_PROVIDER")
+DEFAULT_GATEWAY_URL = "https://opshub-woad.vercel.app/"
+
+
+def gateway_url() -> str:
+    """Use an explicit reviewer gateway, otherwise the deployed demo gateway."""
+    return os.getenv("OPSHUB_GATEWAY_URL", "").strip() or DEFAULT_GATEWAY_URL
 
 
 def user_config_path() -> Path:

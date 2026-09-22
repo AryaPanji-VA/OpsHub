@@ -6,9 +6,11 @@ from pathlib import Path
 import httpx
 import pytest
 
+from opshub.config import DEFAULT_GATEWAY_URL, gateway_url
 from opshub.llm import get_llm_provider
 from opshub.llm.exceptions import ConfigurationError, RecoverableLLMError
 from opshub.llm.gateway import GatewayFirstProvider, GatewayProvider
+from opshub.llm.mock import MockLLMProvider
 from opshub.llm.qwen import OPERATIONAL_PLAN_SCHEMA, AGENT_ACTION_SCHEMA
 from opshub.models import OperationalPlan
 
@@ -22,6 +24,41 @@ PLAN = {
     "program": "Demo", "summary": "One task", "tasks": [],
     "checks_required": [], "risk_flags": [], "next_action": "wait_for_human",
 }
+
+
+def test_default_gateway_used_without_environment_override(monkeypatch):
+    monkeypatch.delenv("OPSHUB_GATEWAY_URL", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    assert gateway_url() == DEFAULT_GATEWAY_URL
+    provider = get_llm_provider()
+    assert isinstance(provider, GatewayFirstProvider)
+    assert provider.gateway.endpoint == DEFAULT_GATEWAY_URL.rstrip("/") + "/api/llm"
+
+
+def test_environment_gateway_overrides_default(monkeypatch):
+    monkeypatch.setenv("OPSHUB_GATEWAY_URL", "https://review.example/")
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    assert gateway_url() == "https://review.example/"
+    assert get_llm_provider().gateway.endpoint == "https://review.example/api/llm"
+
+
+def test_default_gateway_failure_falls_back_to_setup(monkeypatch):
+    monkeypatch.delenv("OPSHUB_GATEWAY_URL", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: (_ for _ in ()).throw(
+        httpx.ConnectError("offline")))
+    with pytest.raises(ConfigurationError, match="opshub --setup"):
+        get_llm_provider().generate_plan("Demo notes")
+
+
+def test_mock_mode_ignores_default_and_override(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("OPSHUB_GATEWAY_URL", "https://review.example")
+    assert isinstance(get_llm_provider(), MockLLMProvider)
+    monkeypatch.delenv("OPSHUB_GATEWAY_URL")
+    assert isinstance(get_llm_provider(), MockLLMProvider)
 
 
 def test_gateway_success_and_fixed_model(monkeypatch):
