@@ -1,0 +1,23 @@
+Team Meeting Notes - October 5, 2026
+
+Attendees: Alice (Ops), Bob (Program), Carol (Finance)
+
+Topic: Planning Grand Summit 2026
+
+Alice: We need to book the venue by mid-October. Expected budget around $5000.
+Bob: Speaker invitations go out next month. Budget allocation ~$2000.
+Carol: Finance approved total conference budget of $10000 for Q4.
+
+Deadlines:
+- Venue booking: October 15, 2026
+- Speaker invites: November 1, 2026
+- Full event: December 2026
+
+Risks:
+- Venue booking deadline is tight
+- Speaker availability not confirmed
+
+Next Steps:
+- Alice: Book venue
+- Bob: Start speaker outreach
+- All: Review budget quarterly
