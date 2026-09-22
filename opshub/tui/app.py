@@ -2,6 +2,7 @@
 
 from functools import partial
 from datetime import date
+import sys
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import Input, Static, Label
@@ -12,11 +13,14 @@ from textual.worker import Worker, WorkerState
 from typing import Any, List, Optional
 from opshub.agent import MAX_AGENT_STEPS, OpsHubAgent
 from opshub.llm import get_llm_provider
+from opshub.llm.gateway import gateway_configured
 from opshub.llm.exceptions import ConfigurationError, RecoverableLLMError
 from opshub.cli import format_llm_error
 from opshub.repl import parse_intent, is_operational_notes
 from opshub.cli import parse_budget_input
 from opshub.models import NextAction, Task, ContextSource
+from opshub.config import apply_saved_credentials, load_configuration, needs_setup, save_credentials
+from opshub.tui.setup import FirstRunSetup
 
 # Branding colors
 OPS_COLOR = "#06465A"
@@ -333,8 +337,11 @@ class OpsHubApp(App):
         "TICKETS": "TICKETS",
     }
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, setup_required: bool = False,
+                 setup_protected: Optional[set[str]] = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._setup_required = setup_required
+        self._setup_protected = setup_protected or set()
         self.agent: Optional[OpsHubAgent] = None
         self.agent_error: Optional[str] = None
         self._current_view: str = "INPUT"
@@ -360,6 +367,27 @@ class OpsHubApp(App):
             yield BottomStatus(id="footer-status")
 
     def on_mount(self) -> None:
+        if self._setup_required:
+            self.push_screen(FirstRunSetup(), self._handle_setup)
+        else:
+            self._init_agent()
+            self.query_one("#input-field", Input).focus()
+
+    def _handle_setup(self, credentials: Optional[tuple[str, str]]) -> None:
+        if credentials is None:
+            if needs_setup():
+                self.exit()
+            else:
+                self._init_agent()
+                self.query_one("#input-field", Input).focus()
+            return
+        try:
+            save_credentials(*credentials)
+            apply_saved_credentials(self._setup_protected)
+        except (OSError, ValueError):
+            self.notify("Could not save credentials. Check your user config directory.", severity="error")
+            self.push_screen(FirstRunSetup(), self._handle_setup)
+            return
         self._init_agent()
         self.query_one("#input-field", Input).focus()
 
@@ -558,6 +586,8 @@ class OpsHubApp(App):
                     self._append_output(f"Summary: {plan.summary}")
                 except (ConfigurationError, RecoverableLLMError) as e:
                     self._append_output(format_llm_error(e))
+                    if isinstance(e, ConfigurationError) and gateway_configured() and needs_setup():
+                        self.push_screen(FirstRunSetup(), self._handle_setup)
             else:
                 self._append_output("No plan loaded. Type operational notes or 'new plan'.")
             return
@@ -996,7 +1026,14 @@ class OpsHubApp(App):
 def main() -> int:
     """Launch the TUI."""
     try:
-        app = OpsHubApp()
+        protected = load_configuration()
+        app = OpsHubApp(
+            setup_required="--setup" in sys.argv[1:] or (
+                not gateway_configured()
+                and needs_setup()
+            ),
+            setup_protected=protected,
+        )
         app.run()
         return 0
     except KeyboardInterrupt:

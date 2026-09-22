@@ -424,13 +424,13 @@ class OpsHubAgent:
                     print(f"\nDEBUG: Agent loop failed at step {step}")
                     print(f"  Provider: {type(self.llm_provider).__name__}")
                     print(f"  Exception: {type(e).__name__}")
-                    print(f"  Message: {e}")
+                    print(f"  Category: {e.category or 'provider_error'}")
                     if last_action:
                         print(f"  Last action: {last_action.action.value}")
                     print()
                 self.audit_log.add(
                     "agent_action_failed",
-                    {"step": step, "reason": str(e)},
+                    {"step": step, "reason": e.category or "provider_error"},
                 )
                 self.current_plan.next_action = NextAction.WAIT_FOR_HUMAN
                 return False, self.observations

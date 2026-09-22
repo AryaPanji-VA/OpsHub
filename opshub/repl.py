@@ -191,6 +191,8 @@ def _install_plan(agent, notes: str) -> bool:
 
 def main() -> int:
     load_dotenv()
+    from opshub.config import load_configuration
+    load_configuration()
     print("OpsHub Agent")
     print("Operational AI for SGA\n")
     try:

@@ -58,11 +58,31 @@ Untuk dependensi pengembangan dan test:
 python -m pip install -e ".[dev]"
 ```
 
-Salin `.env.example` menjadi `.env`. Jangan commit API key.
+Saat pertama menjalankan `opshub`, layar setup meminta Groq API Key dan secara
+opsional OpenRouter API Key. Pilih **Save & Continue**. Tidak perlu membuat
+`.env`. Key disimpan di `%APPDATA%\OpsHub\config.env` pada Windows, atau
+`$XDG_CONFIG_HOME/OpsHub/config.env` (default `~/.config/OpsHub/config.env`)
+pada sistem lain; file ini berada di luar repositori. Jalankan `opshub --setup`
+untuk mengganti key yang tersimpan.
+
+Urutan prioritas konfigurasi: variabel lingkungan yang sudah ada, `.env` di
+direktori proyek untuk pengembangan, lalu config pengguna. OpenRouter hanya
+diaktifkan sebagai fallback bila key-nya tersedia. Untuk pengembangan offline,
+salin `.env.example` menjadi `.env` dan gunakan `LLM_PROVIDER=mock`; jangan
+commit API key. Variabel lingkungan atau `.env` yang aktif memiliki prioritas
+lebih tinggi daripada key yang disimpan melalui `--setup`.
+
+Jika punya akses ke repositori GitHub, alternatif instalasi adalah:
+
+```powershell
+python -m pip install git+https://github.com/AryaPanji-VA/OpsHub.git
+opshub
+```
 
 | Variabel | Keterangan |
 | --- | --- |
 | `LLM_PROVIDER` | `mock`, `qwen`, `nex`, atau `fallback` |
+| `OPSHUB_GATEWAY_URL` | Origin HTTPS gateway reviewer, misalnya `https://contoh.vercel.app`; opsional |
 | `GROQ_API_KEY` | API key Groq untuk Qwen |
 | `MODEL_NAME` | Nama model Qwen/Groq; opsional untuk override default |
 | `OPENROUTER_API_KEY` | API key OpenRouter untuk Nex |
@@ -70,8 +90,30 @@ Salin `.env.example` menjadi `.env`. Jangan commit API key.
 
 ## Menjalankan
 
+### Reviewer demo gateway
+
+Reviewer dapat menjalankan OpsHub tanpa memasukkan API key dengan mengatur
+`OPSHUB_GATEWAY_URL=https://<gateway-domain>` pada lingkungan lokal mereka.
+OpsHub mengirim hanya permintaan `plan` atau `action` ke `POST /api/llm` di
+gateway. Gateway memakai model Qwen tetap `qwen/qwen3.8-27b` melalui Groq;
+`GROQ_API_KEY` hanya berada di lingkungan server gateway, **bukan** di aplikasi
+reviewer. Jika gateway gagal atau mengembalikan respons tidak valid, OpsHub
+mencoba provider langsung yang sudah dikonfigurasi. Tanpa key lokal, jalankan
+`opshub --setup` untuk memakai layar first-run yang sudah ada. Setup biasa tetap
+berlaku bila `OPSHUB_GATEWAY_URL` tidak diisi.
+
+Deploy gateway terpisah di Vercel: buat project dengan **Root Directory**
+`gateway`, framework **Other**, lalu set `GROQ_API_KEY` sebagai environment
+variable server-side di project gateway. Deploy dan ambil URL deployment
+sebagai nilai `OPSHUB_GATEWAY_URL` di mesin reviewer. Jangan masukkan key ke
+konfigurasi reviewer atau repository. Endpoint ini publik bagi siapa pun yang
+mengetahui URL, jadi batasi kuota Groq dan matikan deployment seusai review;
+ini bukan gateway produksi dengan autentikasi atau rate limit per pengguna.
+
+
 ```powershell
 opshub                 # TUI utama
+opshub --setup         # Atur/ganti API key lokal
 python -m opshub       # TUI utama
 opshub-cli             # REPL/CLI fallback
 python -m opshub.cli   # CLI lama dengan perintah slash

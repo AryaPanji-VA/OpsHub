@@ -7,6 +7,7 @@ load_dotenv()
 from opshub.agent import OpsHubAgent
 from opshub.llm import get_llm_provider
 from opshub.llm.exceptions import RecoverableLLMError, ConfigurationError
+from opshub.config import load_configuration
 from opshub.models import NextAction, ContextSource, RuntimeContext
 
 
@@ -31,7 +32,7 @@ def format_llm_error(e: Exception) -> str:
     """Format LLM exceptions for user display."""
     if isinstance(e, ConfigurationError):
         return (
-            f"LLM Provider configuration error: {e}\n\n"
+            "LLM Provider configuration error.\n\n"
             f"Provider: {e.provider}\n"
             "Please check your environment variables:\n"
             "  - GROQ_API_KEY (for Qwen/Groq)\n"
@@ -80,9 +81,11 @@ def format_llm_error(e: Exception) -> str:
                 "Please retry later."
             )
 
-        return f"AI provider error: {e}"
+        if category == "api_error":
+            return "AI provider rejected the request. Check the configured API key and retry."
+        return "AI provider error. Check the provider configuration and retry."
     else:
-        return f"AI provider error: {e}"
+        return "AI provider error. Check the provider configuration and retry."
 
 
 def prepare_runtime_context(agent, plan, show_schedule=True):
@@ -213,6 +216,7 @@ def run_workflow(agent):
 
 
 def main():
+    load_configuration()
     try:
         agent = OpsHubAgent(llm_provider=get_llm_provider())
     except (ConfigurationError, RecoverableLLMError) as e:

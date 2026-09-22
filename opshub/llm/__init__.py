@@ -5,7 +5,16 @@ from opshub.llm.exceptions import ConfigurationError
 
 
 def get_llm_provider() -> LLMProvider:
-    """Factory to get LLM provider based on environment."""
+    """Prefer a configured demo gateway without changing direct-provider setup."""
+    from opshub.llm.gateway import GatewayFirstProvider, GatewayProvider, gateway_configured
+
+    if gateway_configured():
+        return GatewayFirstProvider(GatewayProvider())
+    return get_direct_llm_provider()
+
+
+def get_direct_llm_provider() -> LLMProvider:
+    """Original local provider selection and first-run behavior."""
     provider = os.getenv("LLM_PROVIDER", "mock")
 
     if provider == "mock":
