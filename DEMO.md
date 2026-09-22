@@ -1,6 +1,6 @@
 # Panduan demo 3–5 menit
 
-Jalankan `python -m opshub.cli` dari direktori utama proyek. Untuk demo dengan
+Jalankan `opshub` (atau `python -m opshub`) dari direktori utama proyek. Untuk demo dengan
 model sungguhan, atur `.env` sesuai README.md dan gunakan
 `LLM_PROVIDER=fallback`. Model dapat memilih urutan pemeriksaan baca-saja yang
 berbeda, jadi alur di bawah adalah pola yang diharapkan, bukan skrip yang
@@ -10,7 +10,7 @@ mengubah data runtime.
 
 ## A. Alur aman
 
-Tempel notulensi berikut, lalu ketik `/run` pada baris baru:
+Tempel notulensi berikut, lalu tekan Enter pada baris kosong:
 
 ```text
 Grand Summit 2026 akan dilaksanakan pada 15 Oktober 2026 dengan 400 peserta.
@@ -21,23 +21,26 @@ tidak bentrok dengan acara lain.
 PIC masing-masing tugas belum ditetapkan.
 ```
 
-Pilih input anggaran manual (`2`) dan masukkan `15000000`. Jadwal lokal yang
+Pada prompt `opshub>`, jalankan `summary`, `tasks`, lalu `check all`. Pilih
+input anggaran manual (`2`) dan masukkan `15000000`. Jadwal lokal yang
 kosong berarti tidak ada bentrok yang **diketahui**. Jika model mengekstrak
 kedua tenggat dengan benar, task_1 memerlukan pemeriksaan anggaran dan jadwal,
 sedangkan task_2 memerlukan pemeriksaan jadwal. Setelah pemeriksaan tiap tugas
-jelas, agen mengusulkan tiket. Jawab `y` pada masing-masing pertanyaan
+jelas, jalankan `status` lalu `create tickets`. Agen mengusulkan tiket.
+Jawab `y` pada masing-masing pertanyaan
 persetujuan tiket. Dua tiket yang disetujui dibuat, lalu `finish` dapat
-menghasilkan `Next Action: completed`. Gunakan `/log` untuk menunjukkan hasil
-pemeriksaan, persetujuan, tiket, dan penyelesaian.
+menghasilkan `Next Action: completed`. Gunakan `tickets` dan `status` untuk
+menunjukkan hasilnya. Jejak audit lengkap dapat ditampilkan dengan `/log`
+melalui CLI lama (`python -m opshub.cli`).
 
 ## B. Anggaran kurang dan tinjauan manusia
 
-Ketik `/new`, tempel notulensi yang sama, lalu jalankan lagi. Kali ini
-masukkan `10000000` sebagai anggaran tersedia. Pemeriksaan catering senilai
+Ketik `exit`, jalankan `opshub` lagi, lalu tempel notulensi yang sama. Jalankan
+`create tickets` dan masukkan `10000000` sebagai anggaran tersedia.
+Pemeriksaan catering senilai
 Rp12.000.000 seharusnya gagal. Agen seharusnya menuju `wait_for_human` tanpa
 membuat tiket tambahan secara diam-diam. Jangan setujui tiket dalam kasus
-terblokir ini. Tampilkan `/log` untuk hasil pemeriksaan gagal dan peristiwa
-tinjauan manusia.
+terblokir ini. Tampilkan `status` untuk melihat langkah berikutnya.
 
 Untuk mengulang kedua alur secara offline, bersama kasus bentrok jadwal dan
 konteks anggaran yang hilang, jalankan:

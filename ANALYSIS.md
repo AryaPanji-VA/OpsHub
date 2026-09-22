@@ -80,7 +80,8 @@ dikendalikan manusia; proyek ini tidak mengklaim akses ke sistem tersebut.
 Selama proses berjalan, audit di memori mencatat pemilihan aksi model,
 observasi dan hasil tool, aksi tidak valid, permintaan tinjauan manusia,
 keputusan persetujuan, pembuatan tiket, serta status akhir yang terkontrol.
-Perintah `/log` menampilkannya. Pengujian skenario memverifikasi bahwa alur
+Perintah `/log` pada CLI lama menampilkannya; REPL baru menampilkan ringkasan
+melalui `status` dan `tickets`. Pengujian skenario memverifikasi bahwa alur
 aman membuat dua tiket yang disetujui, sedangkan alur yang terblokir tidak
 membuat tiket baru. Audit hilang saat CLI ditutup; ini belum menjadi catatan
 kepatuhan yang tahan lama.

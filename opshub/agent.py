@@ -174,8 +174,8 @@ class OpsHubAgent:
         self.tool_dispatcher = ToolDispatcher(self.current_plan, self.runtime_context)
         return self.current_plan
 
-    def run_checks(self) -> dict[str, List[ToolResult]]:
-        """Execute read-only checks required by each task's trusted fields."""
+    def run_checks(self, check_types: Optional[set[str]] = None) -> dict[str, List[ToolResult]]:
+        """Execute selected read-only checks required by each task's trusted fields."""
         from opshub.tools.budget import check_budget
         from opshub.tools.schedule import check_schedule
 
@@ -185,7 +185,9 @@ class OpsHubAgent:
             return results
 
         for task in self.current_plan.tasks:
-            if "budget" in self.get_required_checks_for_task(task):
+            if "budget" in self.get_required_checks_for_task(task) and (
+                check_types is None or "budget" in check_types
+            ):
                 ok, msg, source = check_budget(
                     task.budget_required,
                     available=self.runtime_context.available_budget,
@@ -214,7 +216,9 @@ class OpsHubAgent:
                     },
                 )
 
-            if "schedule" in self.get_required_checks_for_task(task):
+            if "schedule" in self.get_required_checks_for_task(task) and (
+                check_types is None or "schedule" in check_types
+            ):
                 ok, msg, count, source = check_schedule(
                     task.title, task.deadline,
                     entries=self.runtime_context.schedule_entries,

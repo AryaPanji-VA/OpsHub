@@ -83,6 +83,122 @@ def format_llm_error(e: Exception) -> str:
         return f"AI provider error: {e}"
 
 
+def prepare_runtime_context(agent, plan, show_schedule=True):
+    # Budget input collection
+    if agent.runtime_context.available_budget is None:
+        has_budget_tasks = any(t.budget_required is not None for t in plan.tasks)
+        if has_budget_tasks:
+            print("\nBudget requirement detected:")
+            first_task = next(t for t in plan.tasks if t.budget_required is not None)
+            print(f"Task: {first_task.id}")
+            print(f"Required: Rp{first_task.budget_required:,.0f}")
+            print("\nAvailable budget source:")
+            print("  [1] Use runtime data")
+            print("  [2] Enter manually")
+
+            while True:
+                try:
+                    choice = input("\n> ").strip()
+                    if choice == "1":
+                        from opshub.tools.budget import DATA_FILE, load_budgets
+
+                        if not DATA_FILE.exists():
+                            print("No runtime budget data found. Enter a budget manually.")
+                            continue
+
+                        budget_data = load_budgets()
+                        available = budget_data.get("available", 0) - budget_data.get("allocated", 0)
+                        agent.set_budget(available, ContextSource.RUNTIME_FILE)
+                        print(f"\nUsing runtime budget:")
+                        print(f"Rp{available:,.0f}")
+                        break
+                    elif choice == "2":
+                        while True:
+                            budget_input = input("\nEnter available budget: ").strip()
+                            try:
+                                amount = parse_budget_input(budget_input)
+                                agent.set_budget(amount, ContextSource.HUMAN)
+                                print(f"\nBudget set: Rp{amount:,.0f}")
+                                break
+                            except ValueError as e:
+                                print(f"Invalid budget value: {e}")
+                                print("Please enter a numeric amount (e.g., 15000000)")
+                        break
+                    else:
+                        print("Invalid choice. Please enter 1 or 2.")
+                except KeyboardInterrupt:
+                    print("\nCancelled.")
+                    continue
+
+    # Schedule input display
+    if show_schedule and "schedule" in plan.checks_required:
+        schedule_count = len(agent.runtime_context.schedule_entries or [])
+        if schedule_count == 0:
+            print("\nNo known schedule entries are currently loaded.")
+            print("Schedule check will run against an empty schedule.")
+
+
+def run_workflow(agent):
+    plan = agent.current_plan
+    print("\nAgent loop started.")
+    while True:
+        seen = len(agent.observations)
+        success, observations = agent.run_agent_loop()
+        new_observations = observations[seen:]
+
+        for obs in new_observations:
+            print(f"\n[{obs.status.upper()}]")
+            print(f"  Action: {obs.action}")
+            print(f"  Task: {obs.task_id}")
+            if "required" in obs.details:
+                print(f"  Required: Rp{obs.details['required']:,.0f}")
+            if "available" in obs.details and obs.details["available"] is not None:
+                print(f"  Available: Rp{obs.details['available']:,.0f}")
+            print(f"  Message: {obs.message}")
+
+        if not success:
+            print("\nAgent loop failed.")
+            break
+
+        next_action = plan.next_action
+        print(f"\nNext Action: {next_action.value}")
+        if next_action == NextAction.COMPLETED:
+            print("\nWorkflow completed.")
+            break
+        if next_action != NextAction.READY_TO_CREATE_TICKET:
+            if any(o.status in {"failed", "missing_context"} for o in new_observations):
+                print("\nBlocking reasons:")
+                for obs in new_observations:
+                    if obs.status in {"failed", "missing_context"}:
+                        print(f"  - {obs.action} for {obs.task_id}: {obs.message}")
+            elif any(e["event"] in {"agent_step_limit_reached", "agent_stalled"}
+                     for e in agent.audit_log.events[-2:]):
+                print("Agent could not complete the workflow. Human review required.")
+            break
+
+        proposal = next(o for o in reversed(new_observations)
+                        if o.action == "propose_ticket_creation" and o.status == "ready")
+        task = next(t for t in plan.tasks if t.id == proposal.task_id)
+        agent.request_approval(task.id, "create_ticket")
+        print(f"\nCreate ticket for {task.id}?")
+        try:
+            confirm = input("[y/N] > ").strip().lower()
+        except KeyboardInterrupt:
+            confirm = "n"
+        if confirm != "y":
+            agent.reject_approval(task.id)
+            print(f"\nTicket for {task.id} rejected.")
+            plan.next_action = NextAction.WAIT_FOR_HUMAN
+            break
+        agent.grant_approval(task.id)
+        ticket_id = agent.create_ticket(task)
+        if not ticket_id:
+            print("\nTicket creation failed.")
+            plan.next_action = NextAction.WAIT_FOR_HUMAN
+            break
+        print(f"\nTicket {ticket_id} created.")
+
+
 def main():
     try:
         agent = OpsHubAgent(llm_provider=get_llm_provider())
@@ -140,116 +256,8 @@ def main():
 
             print(f"\nChecks Required: {', '.join(plan.checks_required)}")
 
-            # Budget input collection
-            if "budget" in plan.checks_required and agent.runtime_context.available_budget is None:
-                has_budget_tasks = any(t.budget_required is not None for t in plan.tasks)
-                if has_budget_tasks:
-                    print("\nBudget requirement detected:")
-                    first_task = next(t for t in plan.tasks if t.budget_required is not None)
-                    print(f"Task: {first_task.id}")
-                    print(f"Required: Rp{first_task.budget_required:,.0f}")
-                    print("\nAvailable budget source:")
-                    print("  [1] Use runtime data")
-                    print("  [2] Enter manually")
-
-                    while True:
-                        try:
-                            choice = input("\n> ").strip()
-                            if choice == "1":
-                                from opshub.tools.budget import DATA_FILE, load_budgets
-
-                                if not DATA_FILE.exists():
-                                    print("No runtime budget data found. Enter a budget manually.")
-                                    continue
-
-                                budget_data = load_budgets()
-                                available = budget_data.get("available", 0) - budget_data.get("allocated", 0)
-                                agent.set_budget(available, ContextSource.RUNTIME_FILE)
-                                print(f"\nUsing runtime budget:")
-                                print(f"Rp{available:,.0f}")
-                                break
-                            elif choice == "2":
-                                while True:
-                                    budget_input = input("\nEnter available budget: ").strip()
-                                    try:
-                                        amount = parse_budget_input(budget_input)
-                                        agent.set_budget(amount, ContextSource.HUMAN)
-                                        print(f"\nBudget set: Rp{amount:,.0f}")
-                                        break
-                                    except ValueError as e:
-                                        print(f"Invalid budget value: {e}")
-                                        print("Please enter a numeric amount (e.g., 15000000)")
-                                break
-                            else:
-                                print("Invalid choice. Please enter 1 or 2.")
-                        except KeyboardInterrupt:
-                            print("\nCancelled.")
-                            continue
-
-            # Schedule input display
-            if "schedule" in plan.checks_required:
-                schedule_count = len(agent.runtime_context.schedule_entries or [])
-                if schedule_count == 0:
-                    print("\nNo known schedule entries are currently loaded.")
-                    print("Schedule check will run against an empty schedule.")
-
-            print("\nAgent loop started.")
-            while True:
-                seen = len(agent.observations)
-                success, observations = agent.run_agent_loop()
-                new_observations = observations[seen:]
-
-                for obs in new_observations:
-                    print(f"\n[{obs.status.upper()}]")
-                    print(f"  Action: {obs.action}")
-                    print(f"  Task: {obs.task_id}")
-                    if "required" in obs.details:
-                        print(f"  Required: Rp{obs.details['required']:,.0f}")
-                    if "available" in obs.details and obs.details["available"] is not None:
-                        print(f"  Available: Rp{obs.details['available']:,.0f}")
-                    print(f"  Message: {obs.message}")
-
-                if not success:
-                    print("\nAgent loop failed.")
-                    break
-
-                next_action = plan.next_action
-                print(f"\nNext Action: {next_action.value}")
-                if next_action == NextAction.COMPLETED:
-                    print("\nWorkflow completed.")
-                    break
-                if next_action != NextAction.READY_TO_CREATE_TICKET:
-                    if any(o.status in {"failed", "missing_context"} for o in new_observations):
-                        print("\nBlocking reasons:")
-                        for obs in new_observations:
-                            if obs.status in {"failed", "missing_context"}:
-                                print(f"  - {obs.action} for {obs.task_id}: {obs.message}")
-                    elif any(e["event"] in {"agent_step_limit_reached", "agent_stalled"}
-                             for e in agent.audit_log.events[-2:]):
-                        print("Agent could not complete the workflow. Human review required.")
-                    break
-
-                proposal = next(o for o in reversed(new_observations)
-                                if o.action == "propose_ticket_creation" and o.status == "ready")
-                task = next(t for t in plan.tasks if t.id == proposal.task_id)
-                agent.request_approval(task.id, "create_ticket")
-                print(f"\nCreate ticket for {task.id}?")
-                try:
-                    confirm = input("[y/N] > ").strip().lower()
-                except KeyboardInterrupt:
-                    confirm = "n"
-                if confirm != "y":
-                    agent.reject_approval(task.id)
-                    print(f"\nTicket for {task.id} rejected.")
-                    plan.next_action = NextAction.WAIT_FOR_HUMAN
-                    break
-                agent.grant_approval(task.id)
-                ticket_id = agent.create_ticket(task)
-                if not ticket_id:
-                    print("\nTicket creation failed.")
-                    plan.next_action = NextAction.WAIT_FOR_HUMAN
-                    break
-                print(f"\nTicket {ticket_id} created.")
+            prepare_runtime_context(agent, plan)
+            run_workflow(agent)
 
             continue
 

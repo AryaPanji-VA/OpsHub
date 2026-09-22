@@ -43,19 +43,32 @@ PowerShell:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-python -m opshub.cli
+python -m pip install -e .
+opshub
 ```
 
-`pip install -e .` memasang aplikasi tanpa perangkat pengujian opsional.
+Untuk menjalankan pengujian, pasang juga dependensi pengembangan dengan
+`python -m pip install -e ".[dev]"`.
 
 ## Menjalankan aplikasi dan memilih model
 
-Jalankan `python -m opshub.cli`. Secara bawaan, `LLM_PROVIDER=mock` bersifat
-deterministik dan tidak memerlukan API key. Tempel notulensi, lalu ketik `/run`
-pada baris baru. Gunakan `/log` untuk melihat jejak audit di memori, `/new`
-untuk memulai sesi baru, atau `/exit` untuk keluar. Perintah lain yang tersedia
-adalah `/help` dan `/plan`.
+Jalankan `opshub` atau `python -m opshub`. CLI lama tetap tersedia melalui
+`python -m opshub.cli`. Secara bawaan, `LLM_PROVIDER=mock` bersifat
+deterministik dan tidak memerlukan API key. Pada antarmuka baru, tempel
+notulensi dan tekan Enter pada **baris kosong** untuk membuat rencana. Setelah
+prompt `opshub>` muncul, gunakan perintah berikut:
+
+| Perintah | Hasil |
+| --- | --- |
+| `summary`, `tasks` | Ringkasan program dan daftar tugas |
+| `check all`, `budget`, `schedule` | Pemeriksaan baca-saja yang sesuai |
+| `tickets`, `create tickets` | Tiket sesi ini dan alur usulan dengan persetujuan manusia |
+| `status`, `help`, `exit` | Status, bantuan, dan keluar |
+
+Alias sederhana juga tersedia, misalnya `show tasks`, `recap`, `cek budget`,
+`cek jadwal`, `buat ticket`, dan `keluar`. Perintah di luar koordinasi
+operasional ditolak tanpa dikirim ke model. Antarmuka ini bukan chatbot umum.
+CLI lama masih menerima `/run`, `/log`, `/new`, `/plan`, dan `/exit`.
 
 Pilihan provider adalah `mock`, `qwen` (Qwen melalui Groq), `nex` (Nex melalui
 OpenRouter), dan `fallback` (Qwen/Groq utama, Nex/OpenRouter cadangan). Salin
@@ -94,6 +107,19 @@ python -m pytest tests/test_phase5_scenarios.py -q
 
 Skenario otomatis memakai berkas sementara dan tidak mengubah `data/`.
 
+Contoh singkat setelah rencana terbentuk:
+
+```text
+opshub> summary
+opshub> tasks
+opshub> check all
+opshub> status
+opshub> create tickets
+Create ticket for task_1? [y/N]
+opshub> tickets
+opshub> exit
+```
+
 ## Keamanan dan keterbatasan
 
 Pydantic menolak aksi yang tidak dikenal serta field yang kurang atau
@@ -103,6 +129,12 @@ semua tugas yang perlu ditangani sudah memiliki tiket. Pengulangan `finish`
 yang tidak valid dihentikan lebih awal; alur lain yang belum selesai mencapai
 batas `MAX_AGENT_STEPS=6` sebelum meminta tinjauan manusia. Memasukkan angka
 anggaran bukan persetujuan tiket.
+
+Perintah `check all` menampilkan hasil pemeriksaan baca-saja; `create tickets`
+menjalankan putaran ReAct-lite yang sudah ada sehingga pemeriksaan tersebut
+dapat dijalankan kembali sebelum usulan tiket. Perintah `tickets` menampilkan
+tiket yang dibuat pada sesi ini. REPL baru belum menyediakan `/log`; audit
+lengkap masih dapat dilihat melalui `/log` di CLI lama.
 
 Jadwal kosong berarti **tidak ada bentrok yang diketahui**, bukan bukti
 kalender lengkap. Sistem keuangan dan kalender masih berupa simulasi atau
@@ -117,6 +149,8 @@ pembayaran, pembatalan vendor, atau penandatanganan kontrak.
 ```text
 opshub/
   cli.py             Interaksi terminal
+  repl.py            Perutean perintah interaktif terbatas
+  __main__.py        Titik masuk python -m opshub
   agent.py           Putaran ReAct-lite, dispatch, persetujuan, audit
   models.py          Model rencana, tugas, aksi, dan observasi tervalidasi
   checks.py          Kebutuhan dan status pemeriksaan per tugas
